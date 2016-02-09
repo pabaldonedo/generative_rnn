@@ -55,16 +55,16 @@ class BidirectionalRNN(RNN):
         self.opt = {'type': self.type, 'n_in': self.n_in, 'n_hidden': self.n_hidden,
                     'n_out': self.n_out, 'activation': self.activation_list,
                     'bias_init': self.bias_init}
-        self.defined = False
+        self.initialize_weights()
+        self.complete_defined = False
+        self.reconstruction_defined = False
+        self.define_complete_network()
+        self.define_reconstruction()
 
-    def define_network(self, input_variable):
-        """Given the input variable of the network sets all variables and connections"""
-        self.input = input_variable
-        self.forward_rnn.define_network(self.input)
-        self.backward_rnn.define_network(self.input[-1::-1])
 
-        theta_shape = self.n_out*self.n_hidden[-1]*2+self.n_out
-        self.out_theta = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
+    def define_complete_network(self):
+        """Sets connections for predicting all values given all inputs"""
+
         #self.wout_f_vector = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
         #self.wout_b_vector = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
         #self.out_bias = theano.shared(value=np.zeros(self.n_out, dtype=theano.config.floatX))
@@ -72,8 +72,6 @@ class BidirectionalRNN(RNN):
         #self.initialize_wout(self.wout_f, self.wout_b_vector)
         #self.initialize_wout(self.wout_f)
         #self.initialize_bias(self.out_bias)
-        self.initialize_weights(theta_shape)
-        self.theta = T.concatenate((self.forward_rnn.theta, self.backward_rnn.theta, self.out_theta))
 
         def step(htm1_f, htm1_b):
             y_t = self.activation[-1](T.dot(htm1_f, self.W_out_f) + T.dot(htm1_b, self.W_out_b) +
@@ -97,10 +95,32 @@ class BidirectionalRNN(RNN):
         self.L2_sqr = (self.W_out_f ** 2).sum() + (self.W_out_b ** 2).sum() +  \
                                                 self.forward_rnn.L2_sqr + self.backward_rnn.L2_sqr
 
-        self.defined = True
+        self.predict_complete = theano.function(
+                inputs=[self.x], outputs=self.y_t,
+                givens={self.forward_rnn.x: self.x,
+                        self.backward_rnn.x: self.x[::-1]})
+
+        self.complete_defined = True
+
+    def define_reconstruction(self):
+        self.y_reconstruction = self.activation[-1](T.dot(self.forward_rnn.h[-1], self.W_out_f) +
+                                T.dot(self.backward_rnn.h[-1], self.W_out_b) + self.b)
+
+        self.mask = T.lscalar('mask')
+        self.predict_reconstruction = theano.function(
+                inputs=[self.x, self.mask], outputs=self.y_reconstruction,
+                givens={self.forward_rnn.x: self.x[:self.mask],
+                        self.backward_rnn.x: self.x[-1:self.mask:-1]})
+        self.reconstruction_defined = True
 
 
-    def initialize_weights(self, theta_shape):
+    def initialize_weights(self):
+
+        self.x = T.tensor3(name='x')
+        theta_shape = self.n_out*self.n_hidden[-1]*2+self.n_out
+        self.out_theta = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
+        self.theta = T.concatenate((self.forward_rnn.theta, self.backward_rnn.theta, self.out_theta))
+
         param_idx = 0
         param_idx, W_out_f_init, W_out_b_init = self.initialize_wout(param_idx)
         param_idx, b_out_init = self.initialize_out_bias(param_idx)
@@ -199,25 +219,12 @@ class HiddenRNN(RNN):
 
         logging.info('RNN loaded. Type: {0}, input layer: {1}, hidden layers: {2}'
             'activation: {3}'.format(self.type, self.n_in, self.n_hidden, self.activation))
+        self.initialize_weights()
+        self.define_network()
 
 
-    def define_network(self, input_variable):
-        """Given the input variable of the network sets all variables and connections"""
-
-        self.input = input_variable
-
-        n_layers = len(self.n_hidden)
-
-        # theta is a vector of all trainable parameters
-        # it represents the value of W, W_in, W_out, h0, bh, by
-        theta_shape = np.sum(self.n_hidden ** 2) + self.n_in * self.n_hidden[0] + \
-                    np.sum(self.n_hidden[:-1]*self.n_hidden[1:]) + \
-                    np.sum(self.n_hidden) + np.sum(self.n_hidden)
-        
-        self.theta = theano.shared(value=np.zeros(theta_shape,
-                                                  dtype=theano.config.floatX))
-
-        self.initialize_theta(theta_shape)        
+    def define_network(self):
+        """Sets all connections"""
 
         # recurrent function (using tanh activation function) and arbitrary output
         # activation function
@@ -246,8 +253,8 @@ class HiddenRNN(RNN):
         # Alternatively, T.alloc approach is more robust
 
         self.h, _ = theano.scan(step,
-                    sequences=self.input,
-                    outputs_info=T.alloc(self.h0_as_vector, self.input.shape[1], np.sum(self.n_hidden)))
+                    sequences=self.x,
+                    outputs_info=T.alloc(self.h0_as_vector, self.x.shape[1], np.sum(self.n_hidden)))
 
         # L1 norm ; one regularization option is to enforce L1 norm to
         # be small
@@ -349,8 +356,23 @@ class HiddenRNN(RNN):
 
         return param_idx, bh_init
 
-    def initialize_theta(self, theta_shape):
+    def initialize_weights(self):
         """Initialize values of shared variable theta and assigns it to the network weights"""
+        
+
+        self.x = T.tensor3(name='x')
+
+        # theta is a vector of all trainable parameters
+        # it represents the value of W, W_in, W_out, h0, bh, by
+        theta_shape = np.sum(self.n_hidden ** 2) + self.n_in * self.n_hidden[0] + \
+                    np.sum(self.n_hidden[:-1]*self.n_hidden[1:]) + \
+                    np.sum(self.n_hidden) + np.sum(self.n_hidden)
+        
+        self.theta = theano.shared(value=np.zeros(theta_shape,
+                                                  dtype=theano.config.floatX))
+
+
+
         #Parameters are reshaped views of theta
         param_idx = 0  # pointer to somewhere along parameter vector
         param_idx, Wr_init = self.initialize_recursive_weights(param_idx)

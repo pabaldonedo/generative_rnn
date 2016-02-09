@@ -30,12 +30,12 @@ bias_init = [0, 0]
 rnn = BidirectionalRNN(n_in, n_hidden, n_out, activation, bias_init, prng)
 
 #Input and output variables with dimension (time, nseq, data dimensionality)
-x = T.tensor3(name='x')
-y = T.tensor3(name='y', dtype=theano.config.floatX)
+#x = T.tensor3(name='x')
+#y = T.tensor3(name='y', dtype=theano.config.floatX)
 
 #Connect rnn
-rnn.define_network(x)
-predict = theano.function(inputs=[x,], outputs=[rnn.y_t, rnn.forward_rnn.h, rnn.backward_rnn.h])
+#rnn.define_network()
+#predict = theano.function(inputs=[x,], outputs=[rnn.y_t, rnn.forward_rnn.h, rnn.backward_rnn.h])
 
 
 
@@ -44,16 +44,17 @@ x_data = np.empty((5,3,1))
 x_data[:,0,0] = np.arange(5)
 x_data[:,1,0] = np.arange(5)
 x_data[:,2,0] = np.arange(5)
+mask = 2
 
-
-y_hat, hf, hb = predict(x_data)
+#y_hat, hf, hb = predict(x_data)
+y_hat = rnn.predict_reconstruction(x_data, mask)
 print y_hat.shape
 print "--- y ---"
 print y_hat
 print "--- hf ---"
 print hf
 print "--- hb ---"
-
 print hb
-
+print "--- xb ---"
+print xb
 
