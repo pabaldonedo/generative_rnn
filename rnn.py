@@ -57,21 +57,11 @@ class BidirectionalRNN(RNN):
                     'bias_init': self.bias_init}
         self.initialize_weights()
         self.complete_defined = False
-        self.reconstruction_defined = False
         self.define_complete_network()
-        self.define_reconstruction()
 
 
     def define_complete_network(self):
         """Sets connections for predicting all values given all inputs"""
-
-        #self.wout_f_vector = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
-        #self.wout_b_vector = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
-        #self.out_bias = theano.shared(value=np.zeros(self.n_out, dtype=theano.config.floatX))
-
-        #self.initialize_wout(self.wout_f, self.wout_b_vector)
-        #self.initialize_wout(self.wout_f)
-        #self.initialize_bias(self.out_bias)
 
         def step(htm1_f, htm1_b):
             y_t = self.activation[-1](T.dot(htm1_f, self.W_out_f) + T.dot(htm1_b, self.W_out_b) +
@@ -96,46 +86,43 @@ class BidirectionalRNN(RNN):
                                                 self.forward_rnn.L2_sqr + self.backward_rnn.L2_sqr
 
         self.predict_complete = theano.function(
-                inputs=[self.x], outputs=self.y_t,
-                givens={self.forward_rnn.x: self.x,
-                        self.backward_rnn.x: self.x[::-1]})
+                inputs=[self.x], outputs=self.y_t)
 
         self.complete_defined = True
-
-    def define_reconstruction(self):
-        self.y_reconstruction = self.activation[-1](T.dot(self.forward_rnn.h[-1], self.W_out_f) +
-                                T.dot(self.backward_rnn.h[-1], self.W_out_b) + self.b)
-
-        self.mask = T.lscalar('mask')
-        self.predict_reconstruction = theano.function(
-                inputs=[self.x, self.mask], outputs=self.y_reconstruction,
-                givens={self.forward_rnn.x: self.x[:self.mask],
-                        self.backward_rnn.x: self.x[-1:self.mask:-1]})
-        self.reconstruction_defined = True
 
 
     def initialize_weights(self):
 
+        #Input variable
         self.x = T.tensor3(name='x')
+
+        #Number of weights in hidden RNNs
         hidden_weights_shape = np.sum(self.n_hidden ** 2) + self.n_in * self.n_hidden[0] + \
                     np.sum(self.n_hidden[:-1]*self.n_hidden[1:]) + \
                     np.sum(self.n_hidden) + np.sum(self.n_hidden)
 
+        #Total number of weights and biases
         theta_shape = self.n_out*self.n_hidden[-1]*2+self.n_out + 2*hidden_weights_shape
+
+        #Weight and biases variable
         self.theta = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
 
+        #Compute initialization valures of the variables. First the hidden RNNs and we connect them too
         param_idx = 0
         Wr_init_forward, W_forward_init_forward, h0_init_forward, bh_init_forward = \
-        self.forward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)])
+        self.forward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)],
+                                            self.x)
         self.forward_rnn.define_network()
 
         param_idx += hidden_weights_shape
         Wr_init_backward, W_forward_init_backward, h0_init_backward, bh_init_backward = \
-        self.backward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)])
+        self.backward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)],
+                                            self.x[-1::-1])
 
         self.backward_rnn.define_network()
         param_idx += hidden_weights_shape
 
+        #Compute initialization values for output weights and biases.
         param_idx, W_out_f_init, W_out_b_init = self.initialize_wout(param_idx)
         param_idx, b_out_init = self.initialize_out_bias(param_idx)
 
@@ -143,6 +130,7 @@ class BidirectionalRNN(RNN):
 
         self.pack_weights()
 
+        #Load the initialization values to the variables.
         self.theta.set_value(np.concatenate([x.ravel() for x in
                     (Wr_init_forward, W_forward_init_forward, h0_init_forward, bh_init_forward,
                     Wr_init_backward, W_forward_init_backward, h0_init_backward, bh_init_backward,
@@ -233,8 +221,8 @@ class HiddenRNN(RNN):
         self.defined = False
 
 
-        logging.info('RNN loaded. Type: {0}, input layer: {1}, hidden layers: {2}'
-            'activation: {3}'.format(self.type, self.n_in, self.n_hidden, self.activation))
+        logging.info('RNN loaded. Type: {0}, input layer: {1}, hidden layers: {2} '
+            'activation: {3}'.format(self.type, self.n_in, self.n_hidden, self.activation_list))
 
 
     def define_network(self):
@@ -370,11 +358,11 @@ class HiddenRNN(RNN):
 
         return param_idx, bh_init
 
-    def initialize_weights(self, theta):
+    def initialize_weights(self, theta, input_variable):
         """Returns Initialization values of shared variable theta and assigns it to the network weights"""
         
 
-        self.x = T.tensor3(name='x')
+        self.x = input_variable
 
         # theta is a vector of all trainable parameters
         # it represents the value of W, W_in, W_out, h0, bh, by
