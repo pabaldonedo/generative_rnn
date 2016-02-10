@@ -117,11 +117,25 @@ class BidirectionalRNN(RNN):
     def initialize_weights(self):
 
         self.x = T.tensor3(name='x')
-        theta_shape = self.n_out*self.n_hidden[-1]*2+self.n_out
-        self.out_theta = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
-        self.theta = T.concatenate((self.forward_rnn.theta, self.backward_rnn.theta, self.out_theta))
+        hidden_weights_shape = np.sum(self.n_hidden ** 2) + self.n_in * self.n_hidden[0] + \
+                    np.sum(self.n_hidden[:-1]*self.n_hidden[1:]) + \
+                    np.sum(self.n_hidden) + np.sum(self.n_hidden)
+
+        theta_shape = self.n_out*self.n_hidden[-1]*2+self.n_out + 2*hidden_weights_shape
+        self.theta = theano.shared(value=np.zeros(theta_shape, dtype=theano.config.floatX))
 
         param_idx = 0
+        Wr_init_forward, W_forward_init_forward, h0_init_forward, bh_init_forward = \
+        self.forward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)])
+        self.forward_rnn.define_network()
+
+        param_idx += hidden_weights_shape
+        Wr_init_backward, W_forward_init_backward, h0_init_backward, bh_init_backward = \
+        self.backward_rnn.initialize_weights(self.theta[param_idx:(param_idx+hidden_weights_shape)])
+
+        self.backward_rnn.define_network()
+        param_idx += hidden_weights_shape
+
         param_idx, W_out_f_init, W_out_b_init = self.initialize_wout(param_idx)
         param_idx, b_out_init = self.initialize_out_bias(param_idx)
 
@@ -129,8 +143,10 @@ class BidirectionalRNN(RNN):
 
         self.pack_weights()
 
-        self.out_theta.set_value(np.concatenate([x.ravel() for x in
-                                                (W_out_f_init, W_out_b_init, b_out_init)]))
+        self.theta.set_value(np.concatenate([x.ravel() for x in
+                    (Wr_init_forward, W_forward_init_forward, h0_init_forward, bh_init_forward,
+                    Wr_init_backward, W_forward_init_backward, h0_init_backward, bh_init_backward,
+                    W_out_f_init, W_out_b_init, b_out_init)]))
 
 
     def pack_weights(self):
@@ -147,7 +163,7 @@ class BidirectionalRNN(RNN):
         #                                          dtype=theano.config.floatX)
         W_out_f_init = np.ones((self.n_hidden[-1], self.n_out), dtype=theano.config.floatX)
 
-        self.W_out_f = self.out_theta[param_idx:(param_idx+self.n_hidden[-1]*self.n_out)].reshape(
+        self.W_out_f = self.theta[param_idx:(param_idx+self.n_hidden[-1]*self.n_out)].reshape(
                                                                     (self.n_hidden[-1], self.n_out))
 
         self.W_out_f.name = 'W_out_f'
@@ -158,7 +174,7 @@ class BidirectionalRNN(RNN):
         #                                          dtype=theano.config.floatX)
         W_out_b_init = np.ones((self.n_hidden[-1], self.n_out), dtype=theano.config.floatX)
 
-        self.W_out_b = self.out_theta[param_idx:(param_idx+self.n_hidden[-1]*self.n_out)].reshape(
+        self.W_out_b = self.theta[param_idx:(param_idx+self.n_hidden[-1]*self.n_out)].reshape(
                                                                     (self.n_hidden[-1], self.n_out))
 
         self.W_out_b.name = 'W_out_b'
@@ -168,7 +184,7 @@ class BidirectionalRNN(RNN):
 
     def initialize_out_bias(self, param_idx):
         b_init = np.ones(self.n_out)*self.bias_init[-1]
-        self.b = self.out_theta[param_idx:(param_idx+self.n_out)]
+        self.b = self.theta[param_idx:(param_idx+self.n_out)]
         param_idx += self.n_out
         return param_idx, b_init
 
@@ -219,8 +235,6 @@ class HiddenRNN(RNN):
 
         logging.info('RNN loaded. Type: {0}, input layer: {1}, hidden layers: {2}'
             'activation: {3}'.format(self.type, self.n_in, self.n_hidden, self.activation))
-        self.initialize_weights()
-        self.define_network()
 
 
     def define_network(self):
@@ -356,22 +370,16 @@ class HiddenRNN(RNN):
 
         return param_idx, bh_init
 
-    def initialize_weights(self):
-        """Initialize values of shared variable theta and assigns it to the network weights"""
+    def initialize_weights(self, theta):
+        """Returns Initialization values of shared variable theta and assigns it to the network weights"""
         
 
         self.x = T.tensor3(name='x')
 
         # theta is a vector of all trainable parameters
         # it represents the value of W, W_in, W_out, h0, bh, by
-        theta_shape = np.sum(self.n_hidden ** 2) + self.n_in * self.n_hidden[0] + \
-                    np.sum(self.n_hidden[:-1]*self.n_hidden[1:]) + \
-                    np.sum(self.n_hidden) + np.sum(self.n_hidden)
         
-        self.theta = theano.shared(value=np.zeros(theta_shape,
-                                                  dtype=theano.config.floatX))
-
-
+        self.theta = theta
 
         #Parameters are reshaped views of theta
         param_idx = 0  # pointer to somewhere along parameter vector
@@ -380,13 +388,11 @@ class HiddenRNN(RNN):
         param_idx, h0_init = self.initialize_hidden_units(param_idx)
         param_idx, bh_init = self.initialize_bias(param_idx)
 
-        assert(param_idx == theta_shape)
+        assert(param_idx == theta.shape.eval())
 
         self.pack_weights()
+        return Wr_init, W_forward_init, h0_init, bh_init
 
-        # initialize parameters
-        self.theta.set_value(np.concatenate([x.ravel() for x in
-            (Wr_init, W_forward_init, h0_init, bh_init)]))
 
 
     def pack_weights(self):

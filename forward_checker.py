@@ -1,9 +1,11 @@
 import numpy as np
 from rnn import BidirectionalRNN
 from rnn import HiddenRNN
-
+from optimizer import SGD
+from meta_rnn import MetaRNN
 import theano.tensor as T
 import theano
+import logging
 
 def shared_dataset(self, data_xy, borrow=True):
     """ Load the dataset into shared variables """
@@ -18,6 +20,8 @@ def shared_dataset(self, data_xy, borrow=True):
                                         borrow=True)
 
     return shared_x, shared_y
+    
+logging.basicConfig(level=logging.INFO)
 
 seed = 0
 prng = np.random.RandomState(seed)
@@ -28,7 +32,61 @@ activation = ['linear', 'linear']
 bias_init = [0, 0]
 
 rnn = BidirectionalRNN(n_in, n_hidden, n_out, activation, bias_init, prng)
+opt = SGD('constant', [1e-2], 'nesterov', 0.01, mode=theano.Mode(linker='cvm'))
+epochs = 100
+L1_reg = 0
+L2_reg = 0.1
+burned_in = 0
+loss_name = 'mse'
+batch_size = 1
+meta_rnn = MetaRNN(rnn, opt, epochs, batch_size, L1_reg, L2_reg, burned_in,
+                                                        loss_name, mode=theano.Mode(linker='cvm'))
 
+
+
+import theano.tensor as T
+
+y = T.tensor3(name='y', dtype=theano.config.floatX)
+y_pred = rnn.y_reconstruction
+loss = T.mean((y_pred - y) ** 2)
+
+gtheta = T.grad(loss, rnn.theta)
+
+
+
+th = theano.function(
+                inputs=[], outputs=rnn.theta)
+
+x_data = np.empty((5,3,1))
+x_data[:,0,0] = np.arange(5)
+x_data[:,1,0] = np.arange(5)
+x_data[:,2,0] = np.arange(5)
+mask = 2
+print x_data[mask,:,:].reshape(-1,x_data.shape[1], x_data.shape[2]).shape
+meta_rnn.fit(x_data, x_data[mask,:,:].reshape(-1,x_data.shape[1], x_data.shape[2]), mask)
+
+print rnn.predict_reconstruction(x_data, mask)
+lr = 0.00001
+upd = rnn.theta - lr*gtheta
+gx = theano.function(
+                inputs=[rnn.x, rnn.mask], outputs=loss,
+                givens={rnn.forward_rnn.x: rnn.x[:rnn.mask],
+                        rnn.backward_rnn.x: rnn.x[-1:rnn.mask:-1],
+                        y: x_data[mask,:,:].reshape(-1,x_data.shape[1], x_data.shape[2]),},
+                updates={rnn.theta: upd})
+#t = []
+#for i in xrange(100):
+#    t.append(gx(x_data, mask))
+#    if (i+1) % 10:
+#        print i+1
+
+
+
+
+#print t
+#print th()
+#print 
+#meta_rnn.fit(x_data, x_data[mask,:,:], mask)
 #Input and output variables with dimension (time, nseq, data dimensionality)
 #x = T.tensor3(name='x')
 #y = T.tensor3(name='y', dtype=theano.config.floatX)
@@ -40,21 +98,15 @@ rnn = BidirectionalRNN(n_in, n_hidden, n_out, activation, bias_init, prng)
 
 
 
-x_data = np.empty((5,3,1))
-x_data[:,0,0] = np.arange(5)
-x_data[:,1,0] = np.arange(5)
-x_data[:,2,0] = np.arange(5)
-mask = 2
-
 #y_hat, hf, hb = predict(x_data)
 y_hat = rnn.predict_reconstruction(x_data, mask)
-print y_hat.shape
-print "--- y ---"
-print y_hat
-print "--- hf ---"
-print hf
-print "--- hb ---"
-print hb
-print "--- xb ---"
-print xb
+#print y_hat.shape
+#print "--- y ---"
+#print y_hat
+#print "--- hf ---"
+#print hf
+#print "--- hb ---"
+#print hb
+#print "--- xb ---"#
+#print xb
 
